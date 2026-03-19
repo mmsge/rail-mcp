@@ -88,16 +88,73 @@ get_journey(origin_id="8098160", destination_id="8000105", country="DE", datetim
 get_status()
 ```
 
+## Deploying to Render.com
+
+The server automatically switches to HTTP mode when the `PORT` environment variable is set (Render does this for you).
+
+### One-click deploy
+
+The included `render.yaml` configures everything. Either:
+
+- **Connect your repo** in the Render dashboard and it will detect `render.yaml` automatically, or
+- Click **New → Blueprint** and point it at this repo.
+
+### Manual Render settings
+
+| Setting | Value |
+|---------|-------|
+| **Runtime** | Node |
+| **Build Command** | `npm install && npm run build` |
+| **Start Command** | `node dist/index.js` |
+| **Health Check Path** | `/health` |
+| **Plan** | Free (spins down after inactivity) or Starter (always-on) |
+
+Add optional environment variables in the Render dashboard under **Environment**:
+
+| Variable | Purpose |
+|----------|---------|
+| `TRAFIKLAB_API_KEY` | Enables Sweden |
+| `SNCF_API_KEY` | Enables France |
+
+### MCP endpoint
+
+Once deployed your server's MCP endpoint is:
+
+```
+POST https://<your-service>.onrender.com/mcp
+```
+
+### Connecting Claude to the remote server
+
+In Claude Desktop `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "rail": {
+      "type": "http",
+      "url": "https://<your-service>.onrender.com/mcp"
+    }
+  }
+}
+```
+
 ## Development
 
 ```bash
-npm run dev   # Run with tsx (no build step)
+npm run dev   # Run with tsx (no build step, stdio mode)
 npm run build # Compile to dist/
-npm start     # Run compiled output
+npm start     # Run compiled output (stdio mode locally, HTTP on Render)
 ```
 
-Test with the MCP Inspector:
+Test locally with the MCP Inspector:
 
 ```bash
 npx @modelcontextprotocol/inspector node dist/index.js
+```
+
+Test the HTTP endpoint directly (e.g. with `PORT=3000 node dist/index.js` in one terminal):
+
+```bash
+curl http://localhost:3000/health
 ```
