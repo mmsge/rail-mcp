@@ -1,126 +1,126 @@
 #!/usr/bin/env node
+import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { AdapterRegistry } from './registry.js';
 import type { Journey, Station, TrainService } from './types.js';
 import { COUNTRY_NAMES } from './types.js';
 
 const registry = new AdapterRegistry();
-const server = new McpServer({
-  name: 'rail-mcp',
-  version: '1.0.0',
-});
 
-// ─── Tool: search_stations ────────────────────────────────────────────────────
-server.tool(
-  'search_stations',
-  'Search for train stations by name across Europe. Optionally filter by country code (NO, SE, DK, DE, FR, GB, CH). DE, GB, NO, DK, and CH work without API keys. Use get_status to see which countries are available.',
-  {
-    query: z.string().describe('Station name to search for'),
-    country: z.string().optional().describe('Country code to search in: NO (Norway), SE (Sweden), DK (Denmark), DE (Germany), FR (France), GB (United Kingdom), CH (Switzerland). Omit to search all available countries.'),
-  },
-  async ({ query, country }) => {
-    try {
-      const { stations, notes } = await registry.searchStations(query, country);
-      const parts: string[] = [];
-      if (stations.length === 0) {
-        parts.push(`No stations found for "${query}"${country ? ` in ${country}` : ''}.`);
-      } else {
-        parts.push(formatStations(stations));
+// ─── MCP server factory ───────────────────────────────────────────────────────
+// Called once for stdio, or once per HTTP request for Render/remote deployments.
+
+function createMcpServer(): McpServer {
+  const server = new McpServer({ name: 'rail-mcp', version: '1.0.0' });
+
+  server.tool(
+    'search_stations',
+    'Search for train stations by name across Europe. Optionally filter by country code (NO, SE, DK, DE, FR, GB, CH). DE, GB, NO, DK, and CH work without API keys. Use get_status to see which countries are available.',
+    {
+      query: z.string().describe('Station name to search for'),
+      country: z.string().optional().describe('Country code to search in: NO (Norway), SE (Sweden), DK (Denmark), DE (Germany), FR (France), GB (United Kingdom), CH (Switzerland). Omit to search all available countries.'),
+    },
+    async ({ query, country }) => {
+      try {
+        const { stations, notes } = await registry.searchStations(query, country);
+        const parts: string[] = [];
+        if (stations.length === 0) {
+          parts.push(`No stations found for "${query}"${country ? ` in ${country}` : ''}.`);
+        } else {
+          parts.push(formatStations(stations));
+        }
+        if (notes.length > 0) {
+          parts.push('', ...notes.map(n => `Note: ${n}`));
+        }
+        return { content: [{ type: 'text', text: parts.join('\n') }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
       }
-      if (notes.length > 0) {
-        parts.push('', ...notes.map(n => `Note: ${n}`));
-      }
-      return { content: [{ type: 'text', text: parts.join('\n') }] };
-    } catch (err) {
-      return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
     }
-  }
-);
+  );
 
-// ─── Tool: get_departures ─────────────────────────────────────────────────────
-server.tool(
-  'get_departures',
-  'Get live train departures from a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
-  {
-    station_id: z.string().describe('Station ID from search_stations'),
-    country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
-    limit: z.number().optional().describe('Max number of departures to return (default: 10)'),
-  },
-  async ({ station_id, country, limit = 10 }) => {
-    try {
-      const services = await registry.getDepartures(station_id, country, limit);
-      if (services.length === 0) {
-        return { content: [{ type: 'text', text: 'No departures found.' }] };
+  server.tool(
+    'get_departures',
+    'Get live train departures from a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
+    {
+      station_id: z.string().describe('Station ID from search_stations'),
+      country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
+      limit: z.number().optional().describe('Max number of departures to return (default: 10)'),
+    },
+    async ({ station_id, country, limit = 10 }) => {
+      try {
+        const services = await registry.getDepartures(station_id, country, limit);
+        if (services.length === 0) {
+          return { content: [{ type: 'text', text: 'No departures found.' }] };
+        }
+        return { content: [{ type: 'text', text: formatServices(services, 'Departures') }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
       }
-      return { content: [{ type: 'text', text: formatServices(services, 'Departures') }] };
-    } catch (err) {
-      return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
     }
-  }
-);
+  );
 
-// ─── Tool: get_arrivals ───────────────────────────────────────────────────────
-server.tool(
-  'get_arrivals',
-  'Get live train arrivals at a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
-  {
-    station_id: z.string().describe('Station ID from search_stations'),
-    country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
-    limit: z.number().optional().describe('Max number of arrivals to return (default: 10)'),
-  },
-  async ({ station_id, country, limit = 10 }) => {
-    try {
-      const services = await registry.getArrivals(station_id, country, limit);
-      if (services.length === 0) {
-        return { content: [{ type: 'text', text: 'No arrivals found.' }] };
+  server.tool(
+    'get_arrivals',
+    'Get live train arrivals at a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
+    {
+      station_id: z.string().describe('Station ID from search_stations'),
+      country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
+      limit: z.number().optional().describe('Max number of arrivals to return (default: 10)'),
+    },
+    async ({ station_id, country, limit = 10 }) => {
+      try {
+        const services = await registry.getArrivals(station_id, country, limit);
+        if (services.length === 0) {
+          return { content: [{ type: 'text', text: 'No arrivals found.' }] };
+        }
+        return { content: [{ type: 'text', text: formatServices(services, 'Arrivals') }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
       }
-      return { content: [{ type: 'text', text: formatServices(services, 'Arrivals') }] };
-    } catch (err) {
-      return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
     }
-  }
-);
+  );
 
-// ─── Tool: get_journey ────────────────────────────────────────────────────────
-server.tool(
-  'get_journey',
-  'Plan a train journey between two stations in the same country. Use search_stations to find station IDs first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
-  {
-    origin_id: z.string().describe('Origin station ID from search_stations'),
-    destination_id: z.string().describe('Destination station ID from search_stations'),
-    country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
-    datetime: z.string().optional().describe('Departure datetime in ISO 8601 format (e.g. 2024-03-15T14:30:00). Defaults to now.'),
-  },
-  async ({ origin_id, destination_id, country, datetime }) => {
-    try {
-      const dt = datetime ? new Date(datetime) : new Date();
-      if (isNaN(dt.getTime())) {
-        return { content: [{ type: 'text', text: `Invalid datetime: "${datetime}". Use ISO 8601 format, e.g. 2024-03-15T14:30:00` }] };
+  server.tool(
+    'get_journey',
+    'Plan a train journey between two stations in the same country. Use search_stations to find station IDs first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
+    {
+      origin_id: z.string().describe('Origin station ID from search_stations'),
+      destination_id: z.string().describe('Destination station ID from search_stations'),
+      country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
+      datetime: z.string().optional().describe('Departure datetime in ISO 8601 format (e.g. 2024-03-15T14:30:00). Defaults to now.'),
+    },
+    async ({ origin_id, destination_id, country, datetime }) => {
+      try {
+        const dt = datetime ? new Date(datetime) : new Date();
+        if (isNaN(dt.getTime())) {
+          return { content: [{ type: 'text', text: `Invalid datetime: "${datetime}". Use ISO 8601 format, e.g. 2024-03-15T14:30:00` }] };
+        }
+        const journeys = await registry.getJourney(origin_id, destination_id, country, dt);
+        if (journeys.length === 0) {
+          return { content: [{ type: 'text', text: 'No journeys found.' }] };
+        }
+        return { content: [{ type: 'text', text: formatJourneys(journeys) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
       }
-      const journeys = await registry.getJourney(origin_id, destination_id, country, dt);
-      if (journeys.length === 0) {
-        return { content: [{ type: 'text', text: 'No journeys found.' }] };
-      }
-      return { content: [{ type: 'text', text: formatJourneys(journeys) }] };
-    } catch (err) {
-      return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
     }
-  }
-);
+  );
 
-// ─── Tool: get_status ────────────────────────────────────────────────────────
-server.tool(
-  'get_status',
-  'Show which European rail APIs are currently available and which require API keys.',
-  {},
-  async () => {
-    return { content: [{ type: 'text', text: registry.statusReport() }] };
-  }
-);
+  server.tool(
+    'get_status',
+    'Show which European rail APIs are currently available and which require API keys.',
+    {},
+    async () => ({ content: [{ type: 'text', text: registry.statusReport() }] })
+  );
 
-// ─── Formatters ──────────────────────────────────────────────────────────────
+  return server;
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 function formatStations(stations: Station[]): string {
   const byCountry = new Map<string, Station[]>();
@@ -129,13 +129,10 @@ function formatStations(stations: Station[]): string {
     if (!byCountry.has(countryName)) byCountry.set(countryName, []);
     byCountry.get(countryName)!.push(s);
   }
-
   const lines: string[] = [`Found ${stations.length} station(s):\n`];
   for (const [countryName, stns] of byCountry) {
     lines.push(`${countryName}:`);
-    for (const s of stns) {
-      lines.push(`  • ${s.name} (ID: ${s.id})`);
-    }
+    for (const s of stns) lines.push(`  • ${s.name} (ID: ${s.id})`);
   }
   return lines.join('\n');
 }
@@ -156,12 +153,8 @@ function formatServices(services: TrainService[], title: string): string {
 }
 
 function buildTimeStr(scheduled: string, actual?: string, delayMins?: number): string {
-  if (!actual || actual === scheduled) {
-    return scheduled;
-  }
-  if (delayMins && delayMins > 0) {
-    return `${scheduled} (${actual}, +${delayMins}min)`;
-  }
+  if (!actual || actual === scheduled) return scheduled;
+  if (delayMins && delayMins > 0) return `${scheduled} (${actual}, +${delayMins}min)`;
   return `${scheduled} (${actual})`;
 }
 
@@ -187,6 +180,60 @@ function formatDuration(minutes: number): string {
   return h > 0 ? `${h}h ${m}min` : `${m}min`;
 }
 
-// ─── Start server ─────────────────────────────────────────────────────────────
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// ─── Transport: HTTP (Render.com) or stdio (local) ────────────────────────────
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : undefined;
+
+if (PORT) {
+  // ── HTTP mode: used when deployed to Render.com or any cloud host ──────────
+  // Each request gets its own McpServer instance (stateless — no session IDs).
+  const httpServer = http.createServer(async (req, res) => {
+    // CORS — allow any MCP client origin
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204).end();
+      return;
+    }
+
+    // Health check — Render uses this to confirm the service is up
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        available: registry.availableAdapters().map(a => a.country),
+      }));
+      return;
+    }
+
+    // MCP endpoint
+    if (req.url === '/mcp') {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless: no session tracking needed
+      });
+      const server = createMcpServer();
+      try {
+        await server.connect(transport);
+        await transport.handleRequest(req, res);
+      } finally {
+        await transport.close();
+        await server.close();
+      }
+      return;
+    }
+
+    res.writeHead(404).end('Not found. Use POST /mcp for MCP or GET /health.');
+  });
+
+  httpServer.listen(PORT, () => {
+    process.stderr.write(`rail-mcp HTTP server listening on port ${PORT}\n`);
+    process.stderr.write(registry.statusReport() + '\n');
+  });
+} else {
+  // ── stdio mode: used locally with Claude Desktop / MCP Inspector ───────────
+  const server = createMcpServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rail-mcp
+    runtime: node
+    plan: free          # upgrade to starter/standard for always-on
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20
+      # Optional — Sweden (free key at trafiklab.se)
+      - key: TRAFIKLAB_API_KEY
+        sync: false
+      # Optional — France (free key at numerique.sncf.com)
+      - key: SNCF_API_KEY
+        sync: false
