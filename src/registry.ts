@@ -40,7 +40,8 @@ export class AdapterRegistry {
   }
 
   /** Search across all available adapters (or a specific country) */
-  async searchStations(query: string, country?: string): Promise<Station[]> {
+  async searchStations(query: string, country?: string): Promise<{ stations: Station[]; notes: string[] }> {
+    const notes: string[] = [];
     const targetCountry = country?.toUpperCase() as Country | undefined;
 
     if (targetCountry) {
@@ -48,23 +49,43 @@ export class AdapterRegistry {
       if (!adapter) throw new Error(`Unknown country code: ${country}. Use: ${[...this.adapters.keys()].join(', ')}`);
       if (!adapter.isAvailable()) {
         const vars = adapter.requiredEnvVars();
-        throw new Error(`${COUNTRY_NAMES[targetCountry]} adapter requires environment variable(s): ${vars.join(', ')}`);
+        throw new Error(
+          `${COUNTRY_NAMES[targetCountry]} requires environment variable(s): ${vars.join(', ')}. ` +
+          `Run get_status to see all available countries.`
+        );
       }
-      return adapter.searchStations(query);
+      return { stations: await adapter.searchStations(query), notes };
+    }
+
+    // Note any unavailable adapters before searching
+    const unavailable = this.unavailableAdapters();
+    if (unavailable.length > 0) {
+      const names = unavailable.map(a => `${COUNTRY_NAMES[a.country]} (needs ${a.requiredEnvVars().join(', ')})`);
+      notes.push(`Skipped countries with missing API keys: ${names.join('; ')}. Run get_status for details.`);
     }
 
     // Search all available adapters in parallel
-    const results = await Promise.allSettled(
-      this.availableAdapters().map(a => a.searchStations(query))
-    );
+    const available = this.availableAdapters();
+    if (available.length === 0) {
+      throw new Error('No rail adapters are available. Run get_status to see configuration requirements.');
+    }
+
+    const results = await Promise.allSettled(available.map(a => a.searchStations(query)));
 
     const stations: Station[] = [];
-    for (const result of results) {
+    const errors: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
       if (result.status === 'fulfilled') {
         stations.push(...result.value);
+      } else {
+        errors.push(`${COUNTRY_NAMES[available[i].country]}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
       }
     }
-    return stations;
+    if (errors.length > 0) {
+      notes.push(`Some countries returned errors: ${errors.join('; ')}`);
+    }
+    return { stations, notes };
   }
 
   async getDepartures(stationId: string, country: string, limit: number): Promise<TrainService[]> {
@@ -99,10 +120,26 @@ export class AdapterRegistry {
   }
 
   statusReport(): string {
-    const lines: string[] = ['Rail MCP - Adapter Status:'];
+    const available: string[] = [];
+    const unavailable: string[] = [];
+
     for (const [code, adapter] of this.adapters) {
-      const status = adapter.isAvailable() ? '✓ Available' : `✗ Needs: ${adapter.requiredEnvVars().join(', ')}`;
-      lines.push(`  ${COUNTRY_NAMES[code]} (${code}): ${status}`);
+      if (adapter.isAvailable()) {
+        const noKey = adapter.requiredEnvVars().length === 0 ? ' (no API key required)' : ' (API key configured)';
+        available.push(`  ${COUNTRY_NAMES[code]} (${code})${noKey}`);
+      } else {
+        const vars = adapter.requiredEnvVars();
+        unavailable.push(`  ${COUNTRY_NAMES[code]} (${code}): set ${vars.join(', ')} to enable`);
+      }
+    }
+
+    const lines: string[] = ['Rail MCP - Adapter Status:'];
+    lines.push(`\nAvailable (${available.length}):`);
+    lines.push(...available);
+    if (unavailable.length > 0) {
+      lines.push(`\nUnavailable - missing API keys (${unavailable.length}):`);
+      lines.push(...unavailable);
+      lines.push('\nSee .env.example for how to obtain free API keys.');
     }
     return lines.join('\n');
   }

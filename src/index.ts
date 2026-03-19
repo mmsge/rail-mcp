@@ -15,19 +15,24 @@ const server = new McpServer({
 // ─── Tool: search_stations ────────────────────────────────────────────────────
 server.tool(
   'search_stations',
-  'Search for train stations by name across Europe. Optionally filter by country code (NO, SE, DK, DE, FR, GB, CH).',
+  'Search for train stations by name across Europe. Optionally filter by country code (NO, SE, DK, DE, FR, GB, CH). DE, GB, NO, DK, and CH work without API keys. Use get_status to see which countries are available.',
   {
     query: z.string().describe('Station name to search for'),
     country: z.string().optional().describe('Country code to search in: NO (Norway), SE (Sweden), DK (Denmark), DE (Germany), FR (France), GB (United Kingdom), CH (Switzerland). Omit to search all available countries.'),
   },
   async ({ query, country }) => {
     try {
-      const stations = await registry.searchStations(query, country);
+      const { stations, notes } = await registry.searchStations(query, country);
+      const parts: string[] = [];
       if (stations.length === 0) {
-        return { content: [{ type: 'text', text: `No stations found for "${query}"${country ? ` in ${country}` : ''}.` }] };
+        parts.push(`No stations found for "${query}"${country ? ` in ${country}` : ''}.`);
+      } else {
+        parts.push(formatStations(stations));
       }
-      const text = formatStations(stations);
-      return { content: [{ type: 'text', text }] };
+      if (notes.length > 0) {
+        parts.push('', ...notes.map(n => `Note: ${n}`));
+      }
+      return { content: [{ type: 'text', text: parts.join('\n') }] };
     } catch (err) {
       return { content: [{ type: 'text', text: `Error: ${String(err instanceof Error ? err.message : err)}` }] };
     }
@@ -37,7 +42,7 @@ server.tool(
 // ─── Tool: get_departures ─────────────────────────────────────────────────────
 server.tool(
   'get_departures',
-  'Get live train departures from a station. Use search_stations to find the station ID first.',
+  'Get live train departures from a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
   {
     station_id: z.string().describe('Station ID from search_stations'),
     country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
@@ -59,7 +64,7 @@ server.tool(
 // ─── Tool: get_arrivals ───────────────────────────────────────────────────────
 server.tool(
   'get_arrivals',
-  'Get live train arrivals at a station. Use search_stations to find the station ID first.',
+  'Get live train arrivals at a station. Use search_stations to find the station ID first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
   {
     station_id: z.string().describe('Station ID from search_stations'),
     country: z.string().describe('Country code: NO, SE, DK, DE, FR, GB, or CH'),
@@ -81,7 +86,7 @@ server.tool(
 // ─── Tool: get_journey ────────────────────────────────────────────────────────
 server.tool(
   'get_journey',
-  'Plan a train journey between two stations in the same country. Use search_stations to find station IDs first.',
+  'Plan a train journey between two stations in the same country. Use search_stations to find station IDs first. DE, GB, NO, DK, and CH work without API keys. Use get_status to see available countries.',
   {
     origin_id: z.string().describe('Origin station ID from search_stations'),
     destination_id: z.string().describe('Destination station ID from search_stations'),
